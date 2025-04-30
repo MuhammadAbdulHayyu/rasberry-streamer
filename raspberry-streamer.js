@@ -1,51 +1,61 @@
-const wrtc = require('wrtc');
-const WebSocket = require('ws');
+// stream-to-youtube.js
+
 const { spawn } = require('child_process');
 
-const ws = new WebSocket('ws://YOUR_SIGNALING_SERVER_IP:3001');
+// ==========================
+// GANTI SESUAI PUNYAMU
+// ==========================
+const STREAM_URL = 'rtmp://a.rtmp.youtube.com/live2';
+const STREAM_KEY = 'abcd-1234-efgh-5678'; // <--- GANTI DENGAN STREAM KEY ANDA
 
-let pc;
+// ==========================
+// OPSIONAL: Gunakan audio dari mic USB (jika ada)
+// - untuk tahu device: jalankan `arecord -l` di terminal
+// ==========================
+// const AUDIO_DEVICE = 'hw:1,0'; // Ganti jika perlu
 
-ws.on('open', async () => {
-  console.log('Connected to signaling server');
-  
-  pc = new wrtc.RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
+// ==========================
+// Jalankan ffmpeg
+// ==========================
 
-  const ffmpeg = spawn('ffmpeg', [
-    '-f', 'v4l2',
-    '-i', '/dev/video0',
-    '-f', 'rawvideo',
-    '-pix_fmt', 'yuv420p',
-    '-'
-  ]);
+const ffmpegArgs = [
+  '-f', 'v4l2',             // format video input
+  '-framerate', '30',       // frame rate
+  '-video_size', '640x480', // resolusi video
+  '-i', '/dev/video0',      // kamera input
 
-  const videoSource = new wrtc.nonstandard.RTCVideoSource();
-  const track = videoSource.createTrack();
-  pc.addTrack(track);
+  // Jika ingin audio, hapus komentar di bawah ini
+  // '-f', 'alsa',
+  // '-i', AUDIO_DEVICE,
 
-  ffmpeg.stdout.on('data', (data) => {
-    videoSource.onFrame({ width: 640, height: 480, data });
-  });
+  '-f', 'flv',              // output format untuk RTMP
+  '-vcodec', 'libx264',
+  '-pix_fmt', 'yuv420p',
+  '-preset', 'veryfast',
+  '-g', '50',
+  '-b:v', '2500k',
+  '-maxrate', '2500k',
+  '-bufsize', '5000k',
+  '-an',                    // hilangkan audio, hapus ini kalau kamu pakai mic
+  `${STREAM_URL}/${STREAM_KEY}`
+];
 
-  pc.onicecandidate = (event) => {
-    if (event.candidate) {
-      ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
-    }
-  };
+console.log('🚀 Starting YouTube Live Stream...');
+console.log('Streaming to:', `${STREAM_URL}/${STREAM_KEY}`);
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+
+// Log output ffmpeg ke terminal
+ffmpeg.stderr.on('data', (data) => {
+  console.error(`[FFmpeg] ${data.toString()}`);
 });
 
-ws.on('message', async (message) => {
-  const data = JSON.parse(message);
+ffmpeg.on('close', (code) => {
+  console.log(`⚠️ FFmpeg exited with code ${code}`);
+});
 
-  if (data.type === 'answer') {
-    await pc.setRemoteDescription(new wrtc.RTCSessionDescription(data));
-  } else if (data.type === 'candidate') {
-    await pc.addIceCandidate(new wrtc.RTCIceCandidate(data.candidate));
-  }
+process.on('SIGINT', () => {
+  console.log('\n🛑 Stopping stream...');
+  ffmpeg.kill('SIGINT');
+  process.exit();
 });
