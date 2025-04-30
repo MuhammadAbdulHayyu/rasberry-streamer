@@ -1,61 +1,63 @@
-// stream-to-youtube.js
-
 const { spawn } = require('child_process');
 
-// ==========================
-// GANTI SESUAI PUNYAMU
-// ==========================
 const STREAM_URL = 'rtmp://a.rtmp.youtube.com/live2';
-const STREAM_KEY = 'abcd-1234-efgh-5678'; // <--- GANTI DENGAN STREAM KEY ANDA
+const STREAM_KEY = '2fc1-txhh-sv0a-ut7s-4y01'; // Ganti dengan milikmu
 
-// ==========================
-// OPSIONAL: Gunakan audio dari mic USB (jika ada)
-// - untuk tahu device: jalankan `arecord -l` di terminal
-// ==========================
-// const AUDIO_DEVICE = 'hw:1,0'; // Ganti jika perlu
+const libcamera = spawn('libcamera-vid', [
+  '-t', '0',
+  '--width', '640',
+  '--height', '480',
+  '--framerate', '30',
+  '--codec', 'yuv420',
+  '--inline',
+  '--nopreview',
+  '-o', '-'
+]);
 
-// ==========================
-// Jalankan ffmpeg
-// ==========================
-
-const ffmpegArgs = [
-  '-f', 'v4l2',             // format video input
-  '-framerate', '30',       // frame rate
-  '-video_size', '640x480', // resolusi video
-  '-i', '/dev/video0',      // kamera input
-
-  // Jika ingin audio, hapus komentar di bawah ini
-  // '-f', 'alsa',
-  // '-i', AUDIO_DEVICE,
-
-  '-f', 'flv',              // output format untuk RTMP
-  '-vcodec', 'libx264',
+const ffmpeg = spawn('ffmpeg', [
+  // Video input
+  '-f', 'rawvideo',
   '-pix_fmt', 'yuv420p',
+  '-s', '640x480',
+  '-r', '30',
+  '-i', 'pipe:0',
+
+  // Audio dummy input
+  '-f', 'lavfi',
+  '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+
+  // Output settings
+  '-shortest',
+  '-c:v', 'libx264',
   '-preset', 'veryfast',
-  '-g', '50',
-  '-b:v', '2500k',
-  '-maxrate', '2500k',
-  '-bufsize', '5000k',
-  '-an',                    // hilangkan audio, hapus ini kalau kamu pakai mic
+  '-b:v', '2000k',
+  '-maxrate', '2000k',
+  '-bufsize', '4000k',
+  '-g', '60',
+  '-pix_fmt', 'yuv420p',
+
+  '-c:a', 'aac',
+  '-ar', '44100',
+  '-b:a', '128k',
+
+  '-f', 'flv',
   `${STREAM_URL}/${STREAM_KEY}`
-];
+]);
 
-console.log('🚀 Starting YouTube Live Stream...');
-console.log('Streaming to:', `${STREAM_URL}/${STREAM_KEY}`);
+// Pipe video output to ffmpeg input
+libcamera.stdout.pipe(ffmpeg.stdin);
 
-const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-
-// Log output ffmpeg ke terminal
+// Logging
 ffmpeg.stderr.on('data', (data) => {
-  console.error(`[FFmpeg] ${data.toString()}`);
+  console.error(`[FFmpeg] ${data}`);
+});
+libcamera.stderr.on('data', (data) => {
+  console.error(`[libcamera-vid] ${data}`);
 });
 
 ffmpeg.on('close', (code) => {
-  console.log(`⚠️ FFmpeg exited with code ${code}`);
+  console.log(`FFmpeg exited with code ${code}`);
 });
-
-process.on('SIGINT', () => {
-  console.log('\n🛑 Stopping stream...');
-  ffmpeg.kill('SIGINT');
-  process.exit();
+libcamera.on('close', (code) => {
+  console.log(`libcamera-vid exited with code ${code}`);
 });
